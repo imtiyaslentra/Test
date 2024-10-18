@@ -1,123 +1,132 @@
--- goofyaahhai
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local VirtualInputManager = game:GetService("VirtualInputManager")
-
-local l = loadstring(game:HttpGet("https://raw.githubusercontent.com/laagginq/ui-libraries/main/dxhooknotify/src.lua", true))()
-l:Notify("Notification", "Visualiser: On", 5)
+local BallFolder = Workspace:WaitForChild("Balls")
 
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
-local parriedBalls = {}
+local canParry = true
 
--- Visualizer setup
-local circle = Instance.new("Part")
-circle.Shape = Enum.PartType.Ball
-circle.Material = Enum.Material.ForceField
-circle.Parent = Workspace
-circle.CanCollide = false
-circle.Anchored = false
-circle.CastShadow = false
-circle.Transparency = 0.8
+-- Membuat ScreenGui dan TextLabel untuk debug
+local screenGui = Instance.new("ScreenGui", player.PlayerGui)
+local debugLabel = Instance.new("TextLabel", screenGui)
 
--- Function to get the nearest ball
-local function getBall()
-    local balls = Workspace.Balls:GetChildren()
-    for _, ball in ipairs(balls) do
-        if not ball.Anchored then
-            return ball
+-- Konfigurasi TextLabel
+debugLabel.Size = UDim2.new(0, 300, 0, 150)  -- Ukuran yang lebih kecil untuk menghindari gangguan
+debugLabel.Position = UDim2.new(0.5, -150, 0, 10)
+debugLabel.BackgroundTransparency = 0.5
+debugLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+debugLabel.Font = Enum.Font.Gotham
+debugLabel.TextSize = 14  -- Ukuran teks lebih kecil
+debugLabel.TextWrapped = true
+debugLabel.Text = "[DEBUG] Waiting for balls..."
+
+local function calculatePredictionTime(ball, player)
+    local character = player.Character
+    if character then
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if rootPart then
+            local relativePosition = ball.Position - rootPart.Position
+            local relativeVelocity = ball.Velocity
+            local a = ball.Size.Magnitude / 1
+            local b = relativePosition.Magnitude
+            local c = math.sqrt(a * a + b * b)
+
+            -- Memperhitungkan kecepatan bola dan jarak untuk memperbaiki prediksi
+            local speedFactor = relativeVelocity.Magnitude > 0 and (1 / relativeVelocity.Magnitude) or 1
+            return (c - a) * speedFactor
+        end
+    end
+    return math.huge
+end
+
+local function parry()
+    if canParry then
+        canParry = false
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        task.delay(0.1, function()
+            canParry = true
+        end)
+        debugLabel.Text = "[OUTPUT] Parry executed!" -- Menampilkan di layar
+    end
+end
+
+local function checkProximityToPlayer(ball, player)
+    local predictionTime = calculatePredictionTime(ball, player)
+    local realBallAttribute = ball:GetAttribute("realBall")
+    local target = ball:GetAttribute("target")
+
+    if predictionTime and realBallAttribute and target then
+        -- Mengatur threshold kecepatan berdasarkan kecepatan bola
+        local ballSpeedThreshold = math.max(0.4, 0.6 - ball.Velocity.Magnitude * 0.03)
+        local accuracyThreshold = predictionTime <= ballSpeedThreshold
+
+        if accuracyThreshold and target == player.Name then
+            parry()
+            return true
+        end
+    end
+    return false
+end
+
+local function getBallData(ball)
+    local character = player.Character
+    if character then
+        local rootPart = character:FindFirstChild("HumanoidRootPart")
+        if rootPart then
+            local distance = (ball.Position - rootPart.Position).Magnitude
+            local speed = ball.Velocity.Magnitude
+
+            -- Menentukan apakah bola tiba-tiba berhenti, mempercepat, berputar, atau curve tajam
+            local suddenStopped = speed < 1 -- Threshold untuk menentukan "berhenti"
+            local suddenlySpeedingUp = speed > 20 -- Threshold untuk menentukan "mempercepat"
+            local ballCurvingSharp = ball.Velocity.Y > 5  -- Threshold untuk menentukan "curve tajam"
+            local ballSuddenlySpinning = ball.Velocity.Magnitude > 15 and ball.AssemblyLinearVelocity.Y > 10 -- Threshold untuk menentukan "tiba-tiba berputar"
+            
+            return {
+                target = ball:GetAttribute("target"),
+                speed = speed,
+                distance = distance,
+                suddenlyStopped = suddenStopped,
+                suddenlySpeedingUp = suddenlySpeedingUp,
+                ballCurvingSharp = ballCurvingSharp,
+                ballSuddenlySpinning = ballSuddenlySpinning
+            }
         end
     end
     return nil
 end
 
--- Function to check if the player is targeted
-local function isTargeted()
-    local balls = Workspace.Balls:GetChildren()
-    for _, ball in ipairs(balls) do
-        if ball:GetAttribute("target") == player.Name then
-            return true -- Player is targeted
+local function checkBallsProximity()
+    local ballsData = {}
+    local parryExecuted = false
+    if player and player.Character then
+        for _, ball in ipairs(BallFolder:GetChildren()) do
+            if ball:IsA("BasePart") then
+                local ballData = getBallData(ball)
+                if ballData then
+                    table.insert(ballsData, ballData)
+                    parryExecuted = parryExecuted or checkProximityToPlayer(ball, player)
+                end
+            end
         end
     end
-    return false -- Player is not targeted
+
+    return ballsData, parryExecuted
 end
 
--- Function to calculate distance to the nearest ball
-local function getDistanceAndBall()
-    local ball = getBall()
-    if humanoidRootPart and ball then
-        local distance = (humanoidRootPart.Position - ball.Position).Magnitude
-        return distance, ball
+RunService.Heartbeat:Connect(function()
+    local ballsData, parryExecuted = checkBallsProximity()
+    
+    -- Menyusun teks untuk ditampilkan
+    local debugText = "[DEBUG] Balls found: " .. #ballsData .. "\n"
+    for _, data in ipairs(ballsData) do
+        debugText = debugText .. string.format("Target: %s, Speed: %.2f, Distance: %.2f, Stopped: %s, Speeding Up: %s, Curving: %s, Spinning: %s\n",
+            data.target, data.speed, data.distance,
+            tostring(data.suddenlyStopped), tostring(data.suddenlySpeedingUp),
+            tostring(data.ballCurvingSharp), tostring(data.ballSuddenlySpinning))
     end
-    return math.huge, nil
-end
-
--- Function to get player's ping
-local function getPing()
-    return player:GetNetworkPing() * 20
-end
-
--- Function to get parry distance based on ball velocity and ping
-local function getParryDist(ball)
-    return math.clamp(ball.Velocity.Magnitude / 2.4 + getPing(), 15, 200)
-end
-
--- Function to wait until player is no longer targeted
-local function waitUntilNotTargeted()
-    local timeout = false
-    spawn(function()
-        wait(0.8)
-        timeout = true -- Set timeout after 0.8 seconds
-    end)
-    repeat
-        RunService.Heartbeat:Wait()
-    until not isTargeted() or timeout
-end
-
--- Function to update visualizer circle
-local function updateCircle()
-    if humanoidRootPart then
-        circle.CFrame = humanoidRootPart.CFrame
-        local distance, ball = getDistanceAndBall()
-        if ball then
-            circle.Size = Vector3.new(getParryDist(ball), getParryDist(ball), getParryDist(ball))
-            circle.Color = isTargeted() and Color3.new(1, 0, 0) or Color3.new(1, 1, 1) -- Change color if targeted
-        end
-    end
-end
-
--- Function to handle parrying
-local function handleTargeting()
-    local distance, ball = getDistanceAndBall()
-    if isTargeted() and distance < getParryDist(ball) then
-        if not parriedBalls[ball] then 
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, nil)
-            wait(0.005)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, nil)
-            parriedBalls[ball] = true
-            waitUntilNotTargeted()
-            parriedBalls = {}
-        end
-    end
-end
-
--- Heartbeat connections for updating visualizer and handling targeting
-local heartbeat1 = RunService.Heartbeat:Connect(function()
-    updateCircle()
-    handleTargeting()
+    debugText = debugText .. "[OUTPUT] Parry: " .. tostring(parryExecuted)
+    debugLabel.Text = debugText
 end)
-
-local heartbeat2 = RunService.Heartbeat:Connect(function()
-    circle.Transparency = getgenv().disableVisualizer and 1 or 0.8
-end)
-
--- Disconnect and cleanup when the script is disabled
-repeat
-    RunService.Heartbeat:Wait()
-until getgenv().disable
-
-heartbeat1:Disconnect()
-heartbeat2:Disconnect()
-circle:Destroy()
