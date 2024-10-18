@@ -1,0 +1,123 @@
+-- goofyaahhai
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local l = loadstring(game:HttpGet("https://raw.githubusercontent.com/laagginq/ui-libraries/main/dxhooknotify/src.lua", true))()
+l:Notify("Notification", "Visualiser: On", 5)
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoidRootPart = character:WaitForChild("HumanoidRootPart")
+local parriedBalls = {}
+
+-- Visualizer setup
+local circle = Instance.new("Part")
+circle.Shape = Enum.PartType.Ball
+circle.Material = Enum.Material.ForceField
+circle.Parent = Workspace
+circle.CanCollide = false
+circle.Anchored = false
+circle.CastShadow = false
+circle.Transparency = 0.8
+
+-- Function to get the nearest ball
+local function getBall()
+    local balls = Workspace.Balls:GetChildren()
+    for _, ball in ipairs(balls) do
+        if not ball.Anchored then
+            return ball
+        end
+    end
+    return nil
+end
+
+-- Function to check if the player is targeted
+local function isTargeted()
+    local balls = Workspace.Balls:GetChildren()
+    for _, ball in ipairs(balls) do
+        if ball:GetAttribute("target") == player.Name then
+            return true -- Player is targeted
+        end
+    end
+    return false -- Player is not targeted
+end
+
+-- Function to calculate distance to the nearest ball
+local function getDistanceAndBall()
+    local ball = getBall()
+    if humanoidRootPart and ball then
+        local distance = (humanoidRootPart.Position - ball.Position).Magnitude
+        return distance, ball
+    end
+    return math.huge, nil
+end
+
+-- Function to get player's ping
+local function getPing()
+    return player:GetNetworkPing() * 20
+end
+
+-- Function to get parry distance based on ball velocity and ping
+local function getParryDist(ball)
+    return math.clamp(ball.Velocity.Magnitude / 2.4 + getPing(), 15, 200)
+end
+
+-- Function to wait until player is no longer targeted
+local function waitUntilNotTargeted()
+    local timeout = false
+    spawn(function()
+        wait(0.8)
+        timeout = true -- Set timeout after 0.8 seconds
+    end)
+    repeat
+        RunService.Heartbeat:Wait()
+    until not isTargeted() or timeout
+end
+
+-- Function to update visualizer circle
+local function updateCircle()
+    if humanoidRootPart then
+        circle.CFrame = humanoidRootPart.CFrame
+        local distance, ball = getDistanceAndBall()
+        if ball then
+            circle.Size = Vector3.new(getParryDist(ball), getParryDist(ball), getParryDist(ball))
+            circle.Color = isTargeted() and Color3.new(1, 0, 0) or Color3.new(1, 1, 1) -- Change color if targeted
+        end
+    end
+end
+
+-- Function to handle parrying
+local function handleTargeting()
+    local distance, ball = getDistanceAndBall()
+    if isTargeted() and distance < getParryDist(ball) then
+        if not parriedBalls[ball] then 
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, nil)
+            wait(0.005)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, nil)
+            parriedBalls[ball] = true
+            waitUntilNotTargeted()
+            parriedBalls = {}
+        end
+    end
+end
+
+-- Heartbeat connections for updating visualizer and handling targeting
+local heartbeat1 = RunService.Heartbeat:Connect(function()
+    updateCircle()
+    handleTargeting()
+end)
+
+local heartbeat2 = RunService.Heartbeat:Connect(function()
+    circle.Transparency = getgenv().disableVisualizer and 1 or 0.8
+end)
+
+-- Disconnect and cleanup when the script is disabled
+repeat
+    RunService.Heartbeat:Wait()
+until getgenv().disable
+
+heartbeat1:Disconnect()
+heartbeat2:Disconnect()
+circle:Destroy()
